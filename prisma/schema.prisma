@@ -1,0 +1,154 @@
+// -----------------------------------------------------------------------------
+// USER & AUTH
+// -----------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  fullName      String?
+  avatarUrl     String?
+  
+  // Security Fields
+  badgeId        String?
+  clearanceLevel String   @default("LEVEL_1")
+  department     String?
+
+  isGlobalAdmin Boolean   @default(false)
+  isSuspended   Boolean   @default(false)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  memberships   Member[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// ORGANIZATION & MULTI-TENANCY
+// -----------------------------------------------------------------------------
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique // For URL routing e.g. /app/my-org/dashboard
+  logoUrl     String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     Member[]
+  roles       Role[]
+  invites     Invite[]
+  auditLogs   AuditLog[]
+}
+
+model Member {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  // SQLite doesn't support arrays of scalars easily, so we might need a join table for roles if strict many-to-many
+  // But for now, we can link to a primary Role or use a JSON string in SQLite if we really want multiple.
+  // Actually, let's keep it simple: One Member has many MemberRoles (Junction)
+  
+  roleLinks      MemberRole[]
+  
+  joinedAt       DateTime     @default(now())
+
+  @@unique([userId, organizationId])
+}
+
+model MemberRole {
+  id        String   @id @default(cuid())
+  memberId  String
+  roleId    String
+  
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, roleId])
+}
+
+// -----------------------------------------------------------------------------
+// RBAC (ROLES & PERMISSIONS)
+// -----------------------------------------------------------------------------
+
+model Role {
+  id             String       @id @default(cuid())
+  name           String
+  description    String?
+  organizationId String
+  
+  // SQLite doesn't support String[] arrays. We use a comma-separated string or JSON.
+  // JSON is supported in Prisma with SQLite.
+  permissions    String      // stored as JSON string "['user.create', ...]"
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberRoles    MemberRole[]
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, name])
+}
+
+model Invite {
+  id             String       @id @default(cuid())
+  email          String
+  organizationId String
+  roleIds        String      // JSON string of role IDs
+  
+  token          String       @unique
+  expiresAt      DateTime
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  inviterId      String
+  createdAt      DateTime     @default(now())
+  
+  @@unique([organizationId, email])
+}
+
+// -----------------------------------------------------------------------------
+// AUDIT LOGGING
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  action         String       // e.g. "USER_INVITED"
+  entityType     String       // e.g. "USER"
+  entityId       String?
+  details        String?      // JSON string
+  
+  actorId        String
+  actor          User         @relation(fields: [actorId], references: [id])
+  
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  ipAddress      String?
+  userAgent      String?
+  
+  createdAt      DateTime     @default(now())
+}
